@@ -1,129 +1,138 @@
 name: Auto Update
 on:
   workflow_dispatch:
+
 jobs:
-  update-modpacks:
+  auto-update:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        modpack: [re-console, re-console-lite]
-        platform: [curseforge, modrinth]
-        loader: [fabric]
-        minecraft: [1.20.1, 1.20.4, 1.21.1, 1.21.3, 1.21.4, 1.21.5, 1.21.8]
-      max-parallel: 3  # Helps with rate limiting
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
         with: 
           token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
       
-      # Check if directory exists first
-      - name: Check if directory exists
-        id: check-dir
-        run: |
-          DIR="./versions/vanilla/src/${{ matrix.modpack }}/${{ matrix.platform }}/${{ matrix.loader }}/${{ matrix.minecraft }}"
-          if [ -d "$DIR" ]; then
-            echo "dir-exists=true" >> $GITHUB_OUTPUT
-            echo "Directory $DIR exists, proceeding with update"
-          else
-            echo "dir-exists=false" >> $GITHUB_OUTPUT
-            echo "Directory $DIR does not exist, skipping all steps"
-          fi
-      
-      # Cache Packwiz binary to avoid Go setup and compilation
-      - name: Cache Packwiz Binary
-        if: steps.check-dir.outputs.dir-exists == 'true'
-        uses: actions/cache@v4
-        id: cache-packwiz
-        with:
-          path: ~/go/bin/packwiz
-          key: packwiz-binary-${{ runner.os }}-v1
-          restore-keys: |
-            packwiz-binary-${{ runner.os }}-
-      
-      # Only set up Go and install Packwiz if not cached
       - name: Set up Go
-        if: steps.check-dir.outputs.dir-exists == 'true' && steps.cache-packwiz.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
           cache: false
       
       - name: Install Packwiz
-        if: steps.check-dir.outputs.dir-exists == 'true' && steps.cache-packwiz.outputs.cache-hit != 'true'
         run: go install github.com/packwiz/packwiz@latest
       
-      # Add Packwiz to PATH (whether cached or freshly installed)
-      - name: Add Packwiz to PATH
-        if: steps.check-dir.outputs.dir-exists == 'true'
-        run: echo "$HOME/go/bin" >> $GITHUB_PATH
-      
-      - name: Update ${{ matrix.modpack }} - ${{ matrix.platform }} - ${{ matrix.loader }} - ${{ matrix.minecraft }}
-        if: steps.check-dir.outputs.dir-exists == 'true'
-        id: update-step
+      - name: Update All Modpacks
         run: |
-          DIR="./versions/vanilla/src/${{ matrix.modpack }}/${{ matrix.platform }}/${{ matrix.loader }}/${{ matrix.minecraft }}"
-          echo "Updating ${{ matrix.modpack }} ${{ matrix.platform }} ${{ matrix.loader }} ${{ matrix.minecraft }}"
-          cd "$DIR"
-          packwiz refresh -y
-          UPDATE_OUTPUT=$(packwiz update -a -y 2>&1 | tail -n 1)
-          echo "update-output=$UPDATE_OUTPUT" >> $GITHUB_OUTPUT
-          echo "Last line of packwiz update: $UPDATE_OUTPUT"
-      
-      - name: Rate limiting delay
-        if: steps.check-dir.outputs.dir-exists == 'true'
-        run: sleep 5
-      
-      # Upload changes only if files were updated
-      - name: Upload changes
-        if: steps.check-dir.outputs.dir-exists == 'true' && steps.update-step.outputs.update-output == 'Files updated!'
-        uses: actions/upload-artifact@v4
-        with:
-          name: changes-${{ strategy.job-index }}
-          path: versions/
-          retention-days: 1
-  
-  commit-changes:
-    needs: update-modpacks
-    runs-on: ubuntu-latest
-    if: always() # Run even if some matrix jobs fail
-    steps:
-      - uses: actions/checkout@v4
-        with: 
-          token: ${{ secrets.GH_PAT }}
-          fetch-depth: 1
-      
-      # Download all artifacts from matrix jobs
-      - name: Download all changes
-        uses: actions/download-artifact@v4
-        with:
-          pattern: changes-*
-          path: ./artifacts/
-          merge-multiple: false
-      
-      # Move artifacts to correct locations  
-      - name: Restore file structure
-        run: |
-          if [ -d "./artifacts" ]; then
-            for artifact_dir in ./artifacts/changes-*; do
-              if [ -d "$artifact_dir" ]; then
-                echo "Processing $artifact_dir"
-                # Each artifact contains a versions/ directory with the full structure
-                if [ -d "$artifact_dir/versions" ]; then
-                  echo "Copying from $artifact_dir/versions/ to ./versions/"
-                  cp -r "$artifact_dir/versions"/* ./versions/
-                else
-                  echo "No versions directory found in $artifact_dir"
-                  ls -la "$artifact_dir"
-                fi
+          # Define arrays
+          declare -a vpacks=("re-console" "re-console-lite")
+          declare -a pfvs=("curseforge" "modrinth")
+          declare -a mlvs=("fabric")
+          declare -a mcvs=("1.20.1" "1.20.4" "1.21.1" "1.21.3" "1.21.4" "1.21.5" "1.21.8")
+          
+          # Function to update a single modpack with detailed logging
+          update_modpack() {
+              local modpack=$1 platform=$2 loader=$3 version=$4
+              local dir="./versions/vanilla/src/$modpack/$platform/$loader/$version"
+              local log_file="/tmp/packwiz_${modpack}_${platform}_${loader}_${version}.log"
+              
+              echo "Starting update: $modpack $platform $loader $version"
+              {
+                  echo "=== Starting packwiz refresh for $modpack $platform $loader $version ==="
+                  cd "$dir"
+                  
+                  echo "--- packwiz refresh output ---"
+                  packwiz refresh -y 2>&1
+                  refresh_exit=$?
+                  echo "--- packwiz refresh exit code: $refresh_exit ---"
+                  
+                  echo "--- packwiz update output ---"
+                  packwiz update -a -y 2>&1
+                  update_exit=$?
+                  echo "--- packwiz update exit code: $update_exit ---"
+                  
+                  echo "=== Completed for $modpack $platform $loader $version ==="
+              } > "$log_file" 2>&1 &
+              
+              # Store the background job PID and log file
+              echo "$! $log_file" >> /tmp/packwiz_jobs.txt
+          }
+          
+          # Initialize job tracking
+          > /tmp/packwiz_jobs.txt
+          started_updates=0
+          
+          for modpack in "${vpacks[@]}"; do
+              for platform in "${pfvs[@]}"; do
+                  for loader in "${mlvs[@]}"; do
+                      for version in "${mcvs[@]}"; do
+                          # Check if directory exists first
+                          dir="./versions/vanilla/src/$modpack/$platform/$loader/$version"
+                          if [ -d "$dir" ]; then
+                              # Directory exists, start the update and count it
+                              update_modpack "$modpack" "$platform" "$loader" "$version"
+                              ((started_updates++))
+                              
+                              # Wait every 4 started updates for rate limiting
+                              if [ $((started_updates % 4)) -eq 0 ]; then
+                                  echo ""
+                                  echo "=== Completed $started_updates updates, waiting for batch to finish ==="
+                                  echo ""
+                                  echo "=== Completed $started_updates updates, waiting for batch to finish ==="
+                                  
+                                  # Wait for all background jobs to complete and show their output
+                                  while read -r job_info; do
+                                      if [ -n "$job_info" ]; then
+                                          pid=$(echo "$job_info" | cut -d' ' -f1)
+                                          log_file=$(echo "$job_info" | cut -d' ' -f2)
+                                          
+                                          # Wait for this specific job
+                                          wait "$pid" 2>/dev/null || true
+                                          
+                                          # Display the log output
+                                          if [ -f "$log_file" ]; then
+                                              echo ""
+                                              echo "Output from job $pid:"
+                                              cat "$log_file"
+                                              rm "$log_file"
+                                          fi
+                                      fi
+                                  done < /tmp/packwiz_jobs.txt
+                                  
+                                  # Clear the jobs file
+                                  > /tmp/packwiz_jobs.txt
+                                  
+                                  echo ""
+                                  echo "=== Rate limiting: waiting 20 seconds ==="
+                                  sleep 20
+                                  echo "=== Continuing with next batch ==="
+                                  echo ""
+                              fi
+                          else
+                              echo "Skipping $modpack $platform $loader $version (directory doesn't exist)"
+                          fi
+                          fi
+                      done
+                  done
+              done
+          done
+          
+          # Wait for any remaining background jobs and show their output
+          echo ""
+          echo "=== Processing final batch ==="
+          while read -r job_info; do
+              if [ -n "$job_info" ]; then
+                  pid=$(echo "$job_info" | cut -d' ' -f1)
+                  log_file=$(echo "$job_info" | cut -d' ' -f2)
+                  
+                  wait "$pid" 2>/dev/null || true
+                  
+                  if [ -f "$log_file" ]; then
+                      echo ""
+                      echo "Output from final job $pid:"
+                      cat "$log_file"
+                      rm "$log_file"
+                  fi
               fi
-            done
-            # Clean up artifacts directory
-            rm -rf "./artifacts"
-          else
-            echo "No artifacts directory found"
-          fi
+          done < /tmp/packwiz_jobs.txt
+          echo "All updates completed"
       
       - name: Commit Updates
         uses: EndBug/add-and-commit@v9.1.4
