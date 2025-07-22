@@ -8,68 +8,101 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-        with: 
-          token: ${{ secrets.GH_PAT }}
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GH_PAT }}
+        fetch-depth: 1
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-          cache: false
+    # Cache Packwiz binary to avoid Go setup and compilation
+    - name: Cache Packwiz Binary
+      uses: actions/cache@v4
+      id: cache-packwiz
+      with:
+        path: ~/go/bin/packwiz
+        key: packwiz-binary-${{ runner.os }}-v1
+        restore-keys: |
+          packwiz-binary-${{ runner.os }}-
 
-      - name: Install Packwiz
-        run: go install github.com/packwiz/packwiz@latest
+    # Only set up Go and install Packwiz if not cached
+    - name: Set up Go
+      if: steps.cache-packwiz.outputs.cache-hit != 'true'
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+        cache: false
 
-      - name: Update All Modpacks
-        run: |
-          # Vanilla Modpacks
-          vpacks=(
-              re-console
-              re-console-lite
-          )
-          # Platform Version
-          pfvs=(
-              curseforge
-              modrinth
-          )
-          # Mod Loader Version
-          mlvs=(
-              fabric
-          )
-          # Minecraft Version
-          mcvs=(
-              1.20.1
-              1.20.4
-              1.21.1
-              1.21.3
-              1.21.4
-              1.21.5
-              1.21.8
-          )
+    - name: Install Packwiz
+      if: steps.cache-packwiz.outputs.cache-hit != 'true'
+      run: go install github.com/packwiz/packwiz@latest
 
-          for i in "${vpacks[@]}"; do
-              for q in "${pfvs[@]}"; do
-                  for w in "${mlvs[@]}"; do
-                      for e in "${mcvs[@]}"; do
-                          DIR="./versions/vanilla/src/$i/$q/$w/$e"
-                          if [ -d "$DIR" ]; then
-                              echo
-                              echo "Updating $i $q $w $e"
-                              (cd $DIR && packwiz refresh -y && packwiz update -a -y)
-                          fi
-                      done
-                  if [ -d "./versions/vanilla/src/$i/$q/$w" ]; then
-                      echo
-                      echo "Waiting 20s for rate-limiting"
-                      echo
-                      sleep 20
-                  fi
-                  done
-              done
+    # Add Packwiz to PATH (whether cached or freshly installed)
+    - name: Add Packwiz to PATH
+      run: echo "$HOME/go/bin" >> $GITHUB_PATH
+
+    - name: Update All Modpacks
+      run: |
+        vpacks=(re-console re-console-lite)
+        pfvs=(curseforge modrinth)
+        mlvs=(fabric)
+        mcvs=(1.20.1 1.20.4 1.21.1 1.21.3 1.21.4 1.21.5 1.21.8)
+
+        batch=()
+        run_batch() {
+          echo "Running batch of ${#batch[@]} updates"
+          pids=()
+          logs=()
+
+          for idx in "${!batch[@]}"; do
+            log_file="update_log_$idx.txt"
+            logs+=("$log_file")
+
+            bash -c "${batch[$idx]}" > "$log_file" 2>&1 &
+            pids+=($!)
           done
 
-      - name: Commit Updates
-        uses: EndBug/add-and-commit@v9.1.4
-        with:
-          default_author: github_actions
+          # Wait for all background tasks to finish
+          for pid in "${pids[@]}"; do
+            wait $pid
+          done
+
+          # Show logs
+          for idx in "${!logs[@]}"; do
+            echo
+            echo "==== Output for Task $((idx + 1)) ===="
+            cat "${logs[$idx]}"
+            echo "==== End Output for Task $((idx + 1)) ===="
+            echo
+          done
+
+          echo "Batch complete, waiting 20 seconds..."
+          echo
+          sleep 20
+          batch=()
+        }
+
+        for i in "${vpacks[@]}"; do
+          for q in "${pfvs[@]}"; do
+            for w in "${mlvs[@]}"; do
+              for e in "${mcvs[@]}"; do
+                DIR="./versions/vanilla/src/$i/$q/$w/$e"
+                if [ -d "$DIR" ]; then
+                  echo "Queued: $i $q $w $e"
+                  batch+=("cd \"$DIR\" && packwiz refresh -y && packwiz update -a -y")
+                  if [ "${#batch[@]}" -eq 4 ]; then
+                    run_batch
+                  fi
+                fi
+              done
+            done
+          done
+        done
+
+        # Final batch if anything remains
+        if [ "${#batch[@]}" -gt 0 ]; then
+          run_batch
+        fi
+
+    - name: Commit Updates
+      uses: EndBug/add-and-commit@v9.1.4
+      with:
+        default_author: github_actions
