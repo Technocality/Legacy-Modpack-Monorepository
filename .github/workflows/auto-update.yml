@@ -115,23 +115,28 @@ jobs:
           done
           
           # Wait for any remaining background jobs and show their output
-          echo ""
-          echo "=== Processing final batch ==="
-          while read -r job_info; do
-              if [ -n "$job_info" ]; then
-                  pid=$(echo "$job_info" | cut -d' ' -f1)
-                  log_file=$(echo "$job_info" | cut -d' ' -f2)
-                  
-                  wait "$pid" 2>/dev/null || true
-                  
-                  if [ -f "$log_file" ]; then
-                      echo ""
-                      echo "Output from final job $pid:"
-                      cat "$log_file"
-                      rm "$log_file"
+          if [ $current_batch_count -gt 0 ]; then
+              echo ""
+              echo "=== Processing final batch ($current_batch_count remaining jobs) ==="
+              while read -r job_info; do
+                  if [ -n "$job_info" ]; then
+                      pid=$(echo "$job_info" | cut -d' ' -f1)
+                      log_file=$(echo "$job_info" | cut -d' ' -f2)
+                      
+                      wait "$pid" 2>/dev/null || true
+                      
+                      if [ -f "$log_file" ]; then
+                          echo ""
+                          echo "Output from final job $pid:"
+                          cat "$log_file"
+                          rm "$log_file"
+                      fi
                   fi
-              fi
-          done < /tmp/packwiz_jobs.txt
+              done < /tmp/packwiz_jobs.txt
+          fi
+          
+          # Cleanup
+          rm -f /tmp/packwiz_jobs.txt
           echo "All updates completed"
       
       - name: Commit Updates
