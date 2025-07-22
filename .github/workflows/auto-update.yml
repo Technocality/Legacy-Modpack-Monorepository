@@ -41,7 +41,7 @@ jobs:
 
     - name: Update All Modpacks
       run: |
-        BATCH_SIZE=3
+        BATCH_SIZE=2
         WAIT_TIME=20
 
         vpacks=(re-console re-console-lite)
