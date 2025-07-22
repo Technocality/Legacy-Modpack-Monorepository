@@ -41,6 +41,9 @@ jobs:
 
     - name: Update All Modpacks
       run: |
+        BATCH_SIZE=3
+        WAIT_TIME=20
+
         vpacks=(re-console re-console-lite)
         pfvs=(curseforge modrinth)
         mlvs=(fabric)
@@ -74,9 +77,9 @@ jobs:
             echo
           done
 
-          echo "Batch complete, waiting 20 seconds..."
+          echo "Batch complete, waiting ${WAIT_TIME} seconds..."
           echo
-          sleep 20
+          sleep ${WAIT_TIME}
           batch=()
         }
 
@@ -88,7 +91,7 @@ jobs:
                 if [ -d "$DIR" ]; then
                   echo "Queued: $i $q $w $e"
                   batch+=("cd \"$DIR\" && packwiz refresh -y && packwiz update -a -y")
-                  if [ "${#batch[@]}" -eq 4 ]; then
+                  if [ "${#batch[@]}" -eq "$BATCH_SIZE" ]; then
                     run_batch
                   fi
                 fi
