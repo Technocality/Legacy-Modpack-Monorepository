@@ -81,12 +81,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: changes-${{ strategy.job-index }}
-          path: ./versions/vanilla/src/${{ matrix.modpack }}/${{ matrix.platform }}/${{ matrix.loader }}/${{ matrix.minecraft }}/
+          path: versions/
           retention-days: 1
   
   commit-changes:
     needs: update-modpacks
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: always() # Run even if some matrix jobs fail
     steps:
       - uses: actions/checkout@v4
@@ -99,29 +99,30 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: changes-*
-          path: ./
+          path: ./artifacts/
           merge-multiple: false
       
-      # Move artifacts to correct locations
+      # Move artifacts to correct locations  
       - name: Restore file structure
         run: |
-          if [ -d "./changes-"* ]; then
-            for artifact_dir in ./changes-*; do
+          if [ -d "./artifacts" ]; then
+            for artifact_dir in ./artifacts/changes-*; do
               if [ -d "$artifact_dir" ]; then
                 echo "Processing $artifact_dir"
-                # Find and move the content to the right location
-                find "$artifact_dir" -name "versions" -type d | while read versions_dir; do
-                  if [ -d "$versions_dir" ]; then
-                    echo "Copying from $versions_dir to ./versions/"
-                    cp -r "$versions_dir"/* ./versions/ 2>/dev/null || true
-                  fi
-                done
-                # Clean up artifact directory
-                rm -rf "$artifact_dir"
+                # Each artifact contains a versions/ directory with the full structure
+                if [ -d "$artifact_dir/versions" ]; then
+                  echo "Copying from $artifact_dir/versions/ to ./versions/"
+                  cp -r "$artifact_dir/versions"/* ./versions/
+                else
+                  echo "No versions directory found in $artifact_dir"
+                  ls -la "$artifact_dir"
+                fi
               fi
             done
+            # Clean up artifacts directory
+            rm -rf "./artifacts"
           else
-            echo "No artifacts found to process"
+            echo "No artifacts directory found"
           fi
       
       - name: Commit Updates
