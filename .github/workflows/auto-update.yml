@@ -42,7 +42,7 @@ jobs:
     - name: Update All Modpacks
       run: |
         BATCH_SIZE=2
-        WAIT_TIME=20
+        WAIT_TIME=15
 
         vpacks=(re-console re-console-lite)
         pfvs=(curseforge modrinth)
@@ -104,6 +104,9 @@ jobs:
         if [ "${#batch[@]}" -gt 0 ]; then
           run_batch
         fi
+
+    - name: Ignore log files from commit
+      run: echo 'update_log_*.txt' >> .gitignore
 
     - name: Commit Updates
       uses: EndBug/add-and-commit@v9.1.4
